@@ -57,19 +57,44 @@ defmodule LiveEEx do
     block =
       Enum.map(dynamic, fn
         {:ast, ast} ->
-          traverse(ast)
+          {ast, _} = analyze(ast)
+          ast
 
         {counter, ast} ->
           var = var(counter)
-          quote do: unquote(var) = unquote(traverse(ast))
+
+          case analyze(ast) do
+            {ast, []} ->
+              quote do
+                unquote(var) =
+                  case __unchanged__ do
+                    %{} -> nil
+                    _ -> unquote(ast)
+                  end
+              end
+
+            {ast, assigns} ->
+              quote do
+                unquote(var) =
+                  case unquote(unchanged_assigns(assigns)) do
+                    true -> nil
+                    false -> unquote(ast)
+                  end
+              end
+          end
       end)
+
+    prelude =
+      quote do
+        __unchanged__ = Map.get(var!(assigns), :__unchanged__, nil)
+      end
 
     rendered =
       quote do
         %LiveEEx.Rendered{static: unquote(binaries), dynamic: unquote(vars)}
       end
 
-    {:__block__, [], block ++ [rendered]}
+    {:__block__, [], [prelude | block] ++ [rendered]}
   end
 
   @impl true
@@ -154,7 +179,7 @@ defmodule LiveEEx do
     end
   end
 
-  ## Traversal
+  ## Traversal/analyzis
 
   defp reverse_static([dynamic | static]) when is_integer(dynamic),
     do: reverse_static(static, [""])
@@ -175,17 +200,42 @@ defmodule LiveEEx do
   defp reverse_static([], acc),
     do: ["" | acc]
 
-  defp traverse(expr) do
-    Macro.prewalk(expr, &handle_assign/1)
+  defp analyze(expr) do
+    {expr, assigns} = Macro.prewalk(expr, %{}, &analyze/2)
+    {expr, Map.keys(assigns)}
   end
 
-  defp handle_assign({:@, meta, [{name, _, atom}]}) when is_atom(name) and is_atom(atom) do
-    quote line: meta[:line] || 0 do
-      Phoenix.HTML.Engine.fetch_assign!(var!(assigns), unquote(name))
+  defp analyze({:@, meta, [{name, _, context}]}, assigns)
+       when is_atom(name) and is_atom(context) do
+    expr =
+      quote line: meta[:line] || 0 do
+        unquote(__MODULE__).fetch_assign!(var!(assigns), unquote(name))
+      end
+
+    {expr, Map.put(assigns, name, true)}
+  end
+
+  defp analyze(arg, assigns), do: {arg, assigns}
+
+  defp unchanged_assigns(assigns) do
+    assigns
+    |> Enum.map(fn assign ->
+      quote do: unquote(__MODULE__).unchanged_assign?(__unchanged__, unquote(assign))
+    end)
+    |> Enum.reduce(&{:and, [], [&1, &2]})
+  end
+
+  @doc false
+  def unchanged_assign?(nil, _name) do
+    false
+  end
+
+  def unchanged_assign?(unchanged, name) do
+    case unchanged do
+      %{^name => _} -> true
+      _ -> false
     end
   end
-
-  defp handle_assign(arg), do: arg
 
   @doc false
   def fetch_assign!(assigns, key) do

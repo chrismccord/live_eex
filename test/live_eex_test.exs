@@ -109,8 +109,25 @@ defmodule LiveEExTest do
     end
   end
 
+  describe "change tracking" do
+    test "does not render dynamic if it is unchanged" do
+      assert unchanged("<%= @foo %>", %{foo: 123}, nil) == ["123"]
+      assert unchanged("<%= @foo %>", %{foo: 123}, %{foo: true}) == [nil]
+    end
+
+    test "does not render dynamic without assigns" do
+      assert unchanged("<%= 1 + 2 %>", %{}, nil) == ["3"]
+      assert unchanged("<%= 1 + 2 %>", %{}, %{}) == [nil]
+    end
+  end
+
   defp eval(string, assigns \\ %{}) do
     EEx.eval_string(string, [assigns: assigns], file: __ENV__.file, engine: LiveEEx)
+  end
+
+  defp unchanged(string, assigns, unchanged) do
+    %{dynamic: dynamic} = eval(string, Map.put(assigns, :__unchanged__, unchanged))
+    dynamic
   end
 
   defp render(string, assigns \\ %{}) do
