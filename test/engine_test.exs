@@ -180,6 +180,11 @@ defmodule Phoenix.LiveView.EngineTest do
       assert Phoenix.View.render_to_string(View, "inner_live.html", @assigns) == "live: inner"
     end
 
+    test "renders live engine with live engine to string" do
+      assert Phoenix.View.render_to_string(View, "live_with_live.html", @assigns) ==
+               "pre: pre\nlive: innerpost: post"
+    end
+
     test "renders live engine as is" do
       assert %Rendered{static: ["live: ", ""], dynamic: ["inner"]} =
                Phoenix.View.render(View, "inner_live.html", @assigns)

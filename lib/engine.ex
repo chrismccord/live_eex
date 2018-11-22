@@ -19,8 +19,16 @@ defmodule Phoenix.LiveView.Rendered do
       to_iodata(static, dynamic, [])
     end
 
+    def to_iodata(nil) do
+      raise "cannot convert .leex template with change tracking to iodata"
+    end
+
+    def to_iodata(other) do
+      other
+    end
+
     defp to_iodata([static_head | static_tail], [dynamic_head | dynamic_tail], acc) do
-      to_iodata(static_tail, dynamic_tail, [dynamic_head, static_head | acc])
+      to_iodata(static_tail, dynamic_tail, [to_iodata(dynamic_head), static_head | acc])
     end
 
     defp to_iodata([static_head], [], acc) do
