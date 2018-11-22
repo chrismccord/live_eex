@@ -10,7 +10,7 @@ defmodule Phoenix.LiveView.Rendered do
 
   @type t :: %__MODULE__{
           static: [String.t()],
-          dynamic: [String.t() | nil | t],
+          dynamic: [iodata() | nil | t],
           fingerprint: binary()
         }
 
@@ -31,19 +31,20 @@ end
 
 defmodule Phoenix.LiveView.Engine do
   @moduledoc """
-  A EEx template engine that tracks changes.
+  The `.leex` (Live EEx) template engine that tracks changes.
 
   On the docs below, we will explain how it works internally.
   For user-facing documentation, see `Phoenix.LiveView`.
 
   ## User facing docs
 
-  TODO: Move this to the Phoenix.live view module.
+  TODO: Move this to the Phoenix.LiveView module.
 
   `Phoenix.LiveView`'s built-in templates use the `.leex`
-  extension. They are similar to regular `.eex` templates
-  except they are designed to minimize the amount of data
-  sent over the wire by tracking changes.
+  extension, which stands for Live EEx. They are similar
+  to regular `.eex` templates except they are designed to
+  minimize the amount of data sent over the wire by tracking
+  changes.
 
   When you first render a `.leex` template, it will send
   all of the static and dynamic parts of the template to
@@ -63,7 +64,9 @@ defmodule Phoenix.LiveView.Engine do
   as much as possible. For example, if you perform this
   operation in your template:
 
-      <%= Repo.all(User) |> Enum.map(& &1.name) %>
+      <%= for user <- Repo.all(User) do %>
+        <%= user.name %>
+      <% end %>
 
   Then Phoenix will never re-render the section above, even
   if the amount of users in the database changes. Instead,
@@ -74,7 +77,7 @@ defmodule Phoenix.LiveView.Engine do
 
   Generally speaking, **data loading should never happen inside
   the template**, regardless if you are using LiveView or not.
-  The difference is that LiveView` enforces those as best
+  The difference is that LiveView enforces those as best
   practices.
 
   Another restriction of LiveView is that, in order to track
@@ -83,7 +86,87 @@ defmodule Phoenix.LiveView.Engine do
   are injecting or accessing user variables, which are not
   recommended in the first place. Overall, `.leex` templates
   do their best to be compatible with any Elixir code, sometimes
-  even turning off optmiizations to keep compatibility.
+  even turning off optimizations to keep compatibility.
+
+  ## Phoenix.LiveView.Rendered
+
+  Whenever you render a `.leex` template, it returns a
+  `Phoenix.LiveView.Rendered` structure. This structure has
+  three fields: `:static`, `:dynamic` and `:fingerprint`.
+
+  The `:static` field is a list of literal strings. This
+  allows the Elixir compiler to optimize this list and avoid
+  allocating its strings on every render.
+
+  The `:dynamic` field contains a list of dynamic content.
+  Each element in the list is either one of:
+
+    1. iodata - which is the dynamic content
+    2. nil - the dynamic content did not change, see "Tracking changes" below
+    3. another `Phoenix.LiveView.Rendered`, see "Nesting and fingerprinting" below
+
+  When you render a `.leex` template, you can convert the
+  rendered structure to iodata by intercalating the static
+  and dynamic fields, always starting with a static entry
+  followed by a dynamic entry. The last entry will always
+  be static too. So the following structure:
+
+      %Phoenix.LiveView.Rendered{
+        static: ["foo", "bar", "baz"],
+        dynamic: ["left", "right"]
+      }
+
+  Results in the following content to be sent over the wire
+  as iodata:
+
+      ["foo", "left", "bar", "right", "baz"]
+
+  This is also what calling `Phoenix.HTML.Safe.to_iodata/1`
+  with a `Phoenix.LiveView.Rendered` structure returns.
+
+  Of course, the benefit of `.leex` templates is exactly
+  that you do not need to send both static and dynamic
+  segments every time. So let's talk about tracking changes.
+
+  ## Tracking changes
+
+  By default, a `.leex` template does not track changes.
+  Change tracking can be enabled by passing a `:__changed__`
+  field as an assign with a map as value. The map should
+  contain the name of any changed field as key and the
+  boolean true as value. If a field is not listed in
+  `:__changed__`, then it is always considered unchanged.
+
+  If a field is unchanged and `.leex` believes a dynamic
+  expression no longer needs to be computed, its value
+  in the `dynamic` list will be `nil`. This information
+  can be leveraged to avoid sending data to the client.
+
+  ## Nesting and fingerprinting
+
+  `Phoenix.LiveView` also tracks changes across live
+  templates. So therefore, if your view has this:
+
+      <%= render "form.html", assigns %>
+
+  Phoenix will be able to track what is static and dynamic
+  across templates, as well as what changed. A rendered
+  nested `.leex` template will appear in the `dynamic`
+  list as another `Phoenix.LiveView.Rendered` structure,
+  which must be handled recursively.
+
+  However, because the rendering of live templates can
+  be dynamic in itself, it is important to distinguish
+  which `.leex` template was rendered. For example,
+  imagine this code:
+
+      <%= if something?, do: render("one.html", assigns), else: render("other.html", assigns) %>
+
+  To solve this, all `Phoenix.LiveView.Rendered` structs
+  also contain a fingerprint field that uniquely identifies
+  it. If the fingerprints are equal, you have the same
+  template, and therefore it is possible to only transmit
+  its changes.
   """
 
   @behaviour Phoenix.Template.Engine
