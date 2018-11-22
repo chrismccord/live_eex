@@ -145,6 +145,21 @@ defmodule Phoenix.LiveView.EngineTest do
     end
   end
 
+  describe "fingerprints" do
+    test "are 16 bytes long and independent of dynamic" do
+      rendered1 = eval("foo<%= @bar %>baz", %{bar: 123})
+      rendered2 = eval("foo<%= @bar %>baz", %{bar: 456})
+      assert byte_size(rendered1.fingerprint) == 16
+      assert rendered1.fingerprint == rendered2.fingerprint
+    end
+
+    test "are different on templates with same static but different dynamic" do
+      rendered1 = eval("foo<%= @bar %>baz", %{bar: 123})
+      rendered2 = eval("foobaz", %{bar: 123})
+      assert rendered1.fingerprint != rendered2.fingerprint
+    end
+  end
+
   defp eval(string, assigns \\ %{}) do
     EEx.eval_string(string, [assigns: assigns],
       file: __ENV__.file,

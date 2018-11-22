@@ -6,11 +6,12 @@ defmodule Phoenix.LiveView.Rendered do
   in `Phoenix.LiveView.Engine` docs.
   """
 
-  defstruct [:static, :dynamic]
+  defstruct [:static, :dynamic, :fingerprint]
 
   @type t :: %__MODULE__{
     static: [String.t],
-    dynamic: [String.t | nil | t]
+    dynamic: [String.t | nil | t],
+    fingerprint: binary()
   }
 
   defimpl Phoenix.HTML.Safe do
@@ -63,6 +64,13 @@ defmodule Phoenix.LiveView.Engine do
     binaries = reverse_static(static)
     dynamic = Enum.reverse(dynamic)
 
+    # We compute the term to binary instead of passing all binaries
+    # because we need to take into account the positions of dynamics.
+    fingerprint =
+      binaries
+      |> :erlang.term_to_binary()
+      |> :erlang.md5()
+
     vars =
       for {counter, _} when is_integer(counter) <- dynamic do
         var(counter)
@@ -87,7 +95,11 @@ defmodule Phoenix.LiveView.Engine do
 
     rendered =
       quote do
-        %Phoenix.LiveView.Rendered{static: unquote(binaries), dynamic: unquote(vars)}
+        %Phoenix.LiveView.Rendered{
+          static: unquote(binaries),
+          dynamic: unquote(vars),
+          fingerprint: unquote(fingerprint)
+        }
       end
 
     {:__block__, [], [prelude | block] ++ [rendered]}
