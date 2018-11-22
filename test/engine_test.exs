@@ -132,7 +132,7 @@ defmodule Phoenix.LiveView.EngineTest do
       assert changed(template, %{foo: '123'}, %{foo: true}) == ["Elixir.List", nil]
     end
 
-    test "renders dynamic if it has variables" do
+    test "does not render dynamic if it has variables from assigns" do
       template = "<%= foo = @foo %><%= foo %>"
       assert changed(template, %{foo: 123}, nil) == ["123", "123"]
       assert changed(template, %{foo: 123}, %{}) == ["123", "123"]
@@ -151,6 +151,20 @@ defmodule Phoenix.LiveView.EngineTest do
       assert changed(template, %{foo: ~w(1 2 3)}, nil) == [["1", "2", "3"]]
       assert changed(template, %{foo: ~w(1 2 3)}, %{}) == [["1", "2", "3"]]
       assert changed(template, %{foo: ~w(1 2 3)}, %{foo: true}) == [nil]
+    end
+
+    test "renders dynamic if it uses assigns" do
+      template = "<%= for _ <- [1, 2, 3], do: assigns.foo %>"
+      assert changed(template, %{foo: "a"}, nil) == [["a", "a", "a"]]
+      assert changed(template, %{foo: "a"}, %{}) == [["a", "a", "a"]]
+      assert changed(template, %{foo: "a"}, %{foo: true}) == [["a", "a", "a"]]
+    end
+
+    test "does not renders dynamic if it has variables from assign" do
+      template = "<% foo = @foo %><%= for _ <- [1, 2, 3], do: foo %>"
+      assert changed(template, %{foo: "a"}, nil) == [["a", "a", "a"]]
+      assert changed(template, %{foo: "a"}, %{}) == [["a", "a", "a"]]
+      assert changed(template, %{foo: "a"}, %{foo: true}) == [nil]
     end
   end
 

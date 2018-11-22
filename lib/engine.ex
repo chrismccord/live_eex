@@ -227,16 +227,15 @@ defmodule Phoenix.LiveView.Engine do
         var(counter)
       end
 
-    block =
-      Enum.map(dynamic, fn
-        {:ast, ast} ->
-          {ast, _} = analyze(ast)
-          ast
+    {block, _} =
+      Enum.map_reduce(dynamic, %{}, fn
+        {:ast, ast}, vars ->
+          {ast, vars, _} = analyze(ast, vars)
+          {ast, vars}
 
-        {counter, ast} ->
-          ast
-          |> analyze()
-          |> to_conditional_var(var(counter))
+        {counter, ast}, vars ->
+          {ast, vars, tainted_or_keys} = analyze(ast, vars)
+          {to_conditional_var(ast, tainted_or_keys, var(counter)), vars}
       end)
 
     prelude =
@@ -366,99 +365,160 @@ defmodule Phoenix.LiveView.Engine do
 
   @lexical_forms [:import, :alias, :require]
 
-  defp analyze(expr) do
-    case analyze(expr, false, %{}) do
-      {expr, true, _assigns} -> {expr, :tainted}
-      {expr, false, assigns} -> {expr, Map.keys(assigns)}
-    end
+  # Here we compute if an expression should be always computed (:tainted),
+  # never computed (no assigns) or some times computed based on assigns.
+  #
+  # If any assign is used, we store it in the assigns and use it to compute
+  # if it shuold be changed or not.
+  #
+  # However, operations that change the lexical scope, such as imports and
+  # defining variables, taint the analysis. Because variables can be set at
+  # any moment in Elixir, via macros, without appearing on the left side of
+  # `=` or in a clause, whenever we see a variable, we consider it as tainted,
+  # regardless of its position.
+  #
+  # The only exceptions are variables used inside certain special forms,
+  # which we know are not capable of leaking the scope. However, even if a
+  # variable is inside a special form, it may have been define previously
+  # in function of an assign, such as:
+  #
+  #     <% var = @foo %>
+  #     <%= for _ <- [1, 2, 3], do: var %>
+  #
+  # In this case, the second expression does depend on the `@foo` assign.
+  # Therefore we do track the relationship between vars and assigns by
+  # attaching all assigns seen in an expression to all vars seen in said
+  # expression. This is a very loose mechanism which disables the optimization
+  # in many cases variables are used, but that's OK since we want to pass
+  # most variables in templates as assigns anyway.
+  #
+  # The tainting that happens from lexical scope is called weak-tainting,
+  # because it is disable under certain special forms. There is also
+  # strong-tainting, which are always computed. Strong-tainting only happens
+  # if the `assigns` variable is used.
+  defp analyze(expr, previous_vars) do
+    {expr, new_vars, assigns} = analyze(expr, previous_vars, %{}, %{})
+
+    {tainted_vars?, new_vars} = Map.pop(new_vars, __MODULE__, false)
+    {tainted_assigns?, assigns} = Map.pop(assigns, __MODULE__, false)
+
+    tainted_or_keys = if tainted_vars? or tainted_assigns?, do: :tainted, else: Map.keys(assigns)
+    {expr, merge_vars(previous_vars, new_vars, assigns), tainted_or_keys}
   end
 
-  defp analyze({:@, meta, [{name, _, context}]}, tainted, assigns)
+  defp analyze({:@, meta, [{name, _, context}]}, _previous, vars, assigns)
        when is_atom(name) and is_atom(context) do
     expr =
       quote line: meta[:line] || 0 do
         unquote(__MODULE__).fetch_assign!(var!(assigns), unquote(name))
       end
 
-    {expr, tainted, Map.put(assigns, name, true)}
+    {expr, vars, Map.put(assigns, name, true)}
+  end
+
+  # Assigns is a strong-taint
+  defp analyze({:assigns, _, nil} = expr, _previous, vars, assigns) do
+    {expr, vars, taint(assigns)}
   end
 
   # Vars always taint
-  defp analyze({name, _, context} = expr, _tainted, assigns)
+  defp analyze({name, _, context} = expr, previous, vars, assigns)
        when is_atom(name) and is_atom(context) do
-    {expr, true, assigns}
+    pair = {name, context}
+    vars = vars |> Map.put(pair, true) |> taint()
+
+    assigns =
+      case previous do
+        %{^pair => map} -> Map.merge(assigns, map)
+        %{} -> assigns
+      end
+
+    {expr, vars, assigns}
   end
 
   # Lexical forms always taint
-  defp analyze({lexical_form, _, [_]} = expr, _tainted, assigns)
+  defp analyze({lexical_form, _, [_]} = expr, _previous, vars, assigns)
        when lexical_form in @lexical_forms do
-    {expr, true, assigns}
+    {expr, taint(vars), assigns}
+  end
+
+  defp analyze({lexical_form, _, [_, _]} = expr, _previous, vars, assigns)
+       when lexical_form in @lexical_forms do
+    {expr, taint(vars), assigns}
   end
 
   # with/for/fn never taint regardless of arity
-  defp analyze({special_form, meta, args}, tainted, assigns)
+  defp analyze({special_form, meta, args}, previous, vars, assigns)
        when special_form in [:with, :for, :fn] do
-    {args, _tainted, assigns} = analyze_list(args, tainted, assigns, [])
-    {{special_form, meta, args}, tainted, assigns}
+    {args, _vars, assigns} = analyze_list(args, previous, vars, assigns, [])
+    {{special_form, meta, args}, vars, assigns}
   end
 
   # case/2 only taint first arg
-  defp analyze({:case, meta, [expr, blocks]}, tainted, assigns) do
-    {expr, tainted, assigns} = analyze(expr, tainted, assigns)
-    {blocks, _tainted, assigns} = analyze(blocks, tainted, assigns)
-    {{:case, meta, [expr, blocks]}, tainted, assigns}
+  defp analyze({:case, meta, [expr, blocks]}, previous, vars, assigns) do
+    {expr, vars, assigns} = analyze(expr, previous, vars, assigns)
+    {blocks, _vars, assigns} = analyze(blocks, previous, vars, assigns)
+    {{:case, meta, [expr, blocks]}, vars, assigns}
   end
 
   # try/receive/cond/&/1 never taint
-  defp analyze({special_form, meta, [blocks]}, tainted, assigns)
+  defp analyze({special_form, meta, [blocks]}, previous, vars, assigns)
        when special_form in [:try, :receive, :cond, :&] do
-    {blocks, _tainted, assigns} = analyze(blocks, tainted, assigns)
-    {{special_form, meta, [blocks]}, tainted, assigns}
+    {blocks, _vars, assigns} = analyze(blocks, previous, vars, assigns)
+    {{special_form, meta, [blocks]}, vars, assigns}
   end
 
-  defp analyze({lexical_form, _, [_, _]} = expr, _tainted, assigns)
-       when lexical_form in @lexical_forms do
-    {expr, true, assigns}
+  defp analyze({left, meta, args}, previous, vars, assigns) do
+    {left, vars, assigns} = analyze(left, previous, vars, assigns)
+    {args, vars, assigns} = analyze_list(args, previous, vars, assigns, [])
+    {{left, meta, args}, vars, assigns}
   end
 
-  defp analyze({left, meta, args}, tainted, assigns) do
-    {left, tainted, assigns} = analyze(left, tainted, assigns)
-    {args, tainted, assigns} = analyze_list(args, tainted, assigns, [])
-    {{left, meta, args}, tainted, assigns}
+  defp analyze({left, right}, previous, vars, assigns) do
+    {left, vars, assigns} = analyze(left, previous, vars, assigns)
+    {right, vars, assigns} = analyze(right, previous, vars, assigns)
+    {{left, right}, vars, assigns}
   end
 
-  defp analyze({left, right}, tainted, assigns) do
-    {left, tainted, assigns} = analyze(left, tainted, assigns)
-    {right, tainted, assigns} = analyze(right, tainted, assigns)
-    {{left, right}, tainted, assigns}
+  defp analyze([_ | _] = list, previous, vars, assigns) do
+    analyze_list(list, previous, vars, assigns, [])
   end
 
-  defp analyze([_ | _] = list, tainted, assigns) do
-    analyze_list(list, tainted, assigns, [])
+  defp analyze(other, _previous, vars, assigns) do
+    {other, vars, assigns}
   end
 
-  defp analyze(other, tainted, assigns) do
-    {other, tainted, assigns}
+  defp analyze_list([head | tail], previous, vars, assigns, acc) do
+    {head, vars, assigns} = analyze(head, previous, vars, assigns)
+    analyze_list(tail, previous, vars, assigns, [head | acc])
   end
 
-  defp analyze_list([head | tail], tainted, assigns, acc) do
-    {head, tainted, assigns} = analyze(head, tainted, assigns)
-    analyze_list(tail, tainted, assigns, [head | acc])
+  defp analyze_list([], _previous, vars, assigns, acc) do
+    {Enum.reverse(acc), vars, assigns}
   end
 
-  defp analyze_list([], tainted, assigns, acc) do
-    {Enum.reverse(acc), tainted, assigns}
+  defp taint(assigns) do
+    Map.put(assigns, __MODULE__, true)
+  end
+
+  defp merge_vars(previous, new, assigns) do
+    Enum.reduce(new, previous, fn {var, _}, acc ->
+      case acc do
+        %{^var => map} -> %{acc | var => Map.merge(map, assigns)}
+        %{} -> Map.put(acc, var, assigns)
+      end
+    end)
   end
 
   @extra_clauses (quote do
                     %{__struct__: Phoenix.LiveView.Rendered} = other -> other
                   end)
 
-  defp to_conditional_var({ast, :tainted}, var) do
+  defp to_conditional_var(ast, :tainted, var) do
     quote do: unquote(var) = unquote(to_safe(ast, @extra_clauses))
   end
 
-  defp to_conditional_var({ast, []}, var) do
+  defp to_conditional_var(ast, [], var) do
     quote do
       unquote(var) =
         case __changed__ do
@@ -468,7 +528,7 @@ defmodule Phoenix.LiveView.Engine do
     end
   end
 
-  defp to_conditional_var({ast, assigns}, var) do
+  defp to_conditional_var(ast, assigns, var) do
     quote do
       unquote(var) =
         case unquote(changed_assigns(assigns)) do
