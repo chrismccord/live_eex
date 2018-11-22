@@ -67,7 +67,7 @@ defmodule LiveEEx do
             {ast, []} ->
               quote do
                 unquote(var) =
-                  case __unchanged__ do
+                  case __changed__ do
                     %{} -> nil
                     _ -> unquote(ast)
                   end
@@ -76,9 +76,9 @@ defmodule LiveEEx do
             {ast, assigns} ->
               quote do
                 unquote(var) =
-                  case unquote(unchanged_assigns(assigns)) do
-                    true -> nil
-                    false -> unquote(ast)
+                  case unquote(changed_assigns(assigns)) do
+                    true -> unquote(ast)
+                    false -> nil
                   end
               end
           end
@@ -86,7 +86,7 @@ defmodule LiveEEx do
 
     prelude =
       quote do
-        __unchanged__ = Map.get(var!(assigns), :__unchanged__, nil)
+        __changed__ = Map.get(var!(assigns), :__changed__, nil)
       end
 
     rendered =
@@ -217,23 +217,23 @@ defmodule LiveEEx do
 
   defp analyze(arg, assigns), do: {arg, assigns}
 
-  defp unchanged_assigns(assigns) do
+  defp changed_assigns(assigns) do
     assigns
     |> Enum.map(fn assign ->
-      quote do: unquote(__MODULE__).unchanged_assign?(__unchanged__, unquote(assign))
+      quote do: unquote(__MODULE__).changed_assign?(__changed__, unquote(assign))
     end)
     |> Enum.reduce(&{:and, [], [&1, &2]})
   end
 
   @doc false
-  def unchanged_assign?(nil, _name) do
-    false
+  def changed_assign?(nil, _name) do
+    true
   end
 
-  def unchanged_assign?(unchanged, name) do
-    case unchanged do
-      %{^name => _} -> true
-      _ -> false
+  def changed_assign?(changed, name) do
+    case changed do
+      %{^name => _} -> false
+      _ -> true
     end
   end
 
