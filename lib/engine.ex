@@ -9,10 +9,10 @@ defmodule Phoenix.LiveView.Rendered do
   defstruct [:static, :dynamic, :fingerprint]
 
   @type t :: %__MODULE__{
-    static: [String.t],
-    dynamic: [String.t | nil | t],
-    fingerprint: binary()
-  }
+          static: [String.t()],
+          dynamic: [String.t() | nil | t],
+          fingerprint: binary()
+        }
 
   defimpl Phoenix.HTML.Safe do
     def to_iodata(%{static: static, dynamic: dynamic}) do
@@ -32,6 +32,13 @@ end
 defmodule Phoenix.LiveView.Engine do
   @moduledoc """
   """
+
+  @behaviour Phoenix.Template.Engine
+
+  @impl true
+  def compile(path, _name) do
+    EEx.compile_file(path, engine: __MODULE__, line: 1, trim: true)
+  end
 
   @behaviour EEx.Engine
 
@@ -132,7 +139,7 @@ defmodule Phoenix.LiveView.Engine do
   def handle_expr(%{root: false} = state, "=", ast) do
     %{static: static, dynamic: dynamic, vars_count: vars_count} = state
     var = var(vars_count)
-    ast = quote do: unquote(var) = unquote(to_safe(ast))
+    ast = quote do: unquote(var) = unquote(to_safe(ast, []))
     %{state | dynamic: [ast | dynamic], static: [var | static], vars_count: vars_count + 1}
   end
 
@@ -153,37 +160,40 @@ defmodule Phoenix.LiveView.Engine do
 
   ## Safe conversion
 
-  defp to_safe(ast) do
-    to_safe(ast, line_from_expr(ast))
+  defp to_safe(ast, extra_clauses) do
+    to_safe(ast, line_from_expr(ast), extra_clauses)
   end
 
   defp line_from_expr({_, meta, _}) when is_list(meta), do: Keyword.get(meta, :line)
   defp line_from_expr(_), do: nil
 
   # We can do the work at compile time
-  defp to_safe(literal, _line)
+  defp to_safe(literal, _line, _extra_clauses)
        when is_binary(literal) or is_atom(literal) or is_number(literal) do
     Phoenix.HTML.Safe.to_iodata(literal)
   end
 
   # We can do the work at runtime
-  defp to_safe(literal, line) when is_list(literal) do
+  defp to_safe(literal, line, _extra_clauses) when is_list(literal) do
     quote line: line, do: Phoenix.HTML.Safe.List.to_iodata(unquote(literal))
   end
 
   # We need to check at runtime and we do so by
   # optimizing common cases.
-  defp to_safe(expr, line) do
+  defp to_safe(expr, line, extra_clauses) do
     # Keep stacktraces for protocol dispatch...
     fallback = quote line: line, do: Phoenix.HTML.Safe.to_iodata(other)
 
     # However ignore them for the generated clauses to avoid warnings
-    quote generated: true do
-      case unquote(expr) do
+    clauses =
+      quote generated: true do
         {:safe, data} -> data
         bin when is_binary(bin) -> Plug.HTML.html_escape_to_iodata(bin)
         other -> unquote(fallback)
       end
+
+    quote generated: true do
+      case unquote(expr), do: unquote(extra_clauses ++ clauses)
     end
   end
 
@@ -260,8 +270,12 @@ defmodule Phoenix.LiveView.Engine do
   defp put_unless_tainted(:tainted, _name), do: :tainted
   defp put_unless_tainted(assigns, name), do: Map.put(assigns, name, true)
 
+  @extra_clauses (quote do
+                    %{__struct__: Phoenix.LiveView.Rendered} = other -> other
+                  end)
+
   defp to_conditional_var({ast, :tainted}, var) do
-    quote do: unquote(var) = unquote(to_safe(ast))
+    quote do: unquote(var) = unquote(to_safe(ast, @extra_clauses))
   end
 
   defp to_conditional_var({ast, []}, var) do
@@ -269,7 +283,7 @@ defmodule Phoenix.LiveView.Engine do
       unquote(var) =
         case __changed__ do
           %{} -> nil
-          _ -> unquote(to_safe(ast))
+          _ -> unquote(to_safe(ast, @extra_clauses))
         end
     end
   end
@@ -278,7 +292,7 @@ defmodule Phoenix.LiveView.Engine do
     quote do
       unquote(var) =
         case unquote(changed_assigns(assigns)) do
-          true -> unquote(to_safe(ast))
+          true -> unquote(to_safe(ast, @extra_clauses))
           false -> nil
         end
     end

@@ -1,6 +1,8 @@
 defmodule Phoenix.LiveView.EngineTest do
   use ExUnit.Case, async: true
 
+  alias Phoenix.LiveView.{Engine, Rendered}
+
   def safe(do: {:safe, _} = safe), do: safe
   def unsafe(do: {:safe, content}), do: content
 
@@ -160,11 +162,48 @@ defmodule Phoenix.LiveView.EngineTest do
     end
   end
 
+  describe "integration" do
+    defmodule View do
+      use Phoenix.View, root: "test/fixtures/templates", path: ""
+    end
+
+    @assigns %{pre: "pre", inner: "inner", post: "post"}
+
+    test "renders live engine to string" do
+      assert Phoenix.View.render_to_string(View, "inner_live.html", @assigns) == "live: inner"
+    end
+
+    test "renders live engine as is" do
+      assert %Rendered{static: ["live: ", ""], dynamic: ["inner"]} =
+               Phoenix.View.render(View, "inner_live.html", @assigns)
+    end
+
+    test "renders live engine with nested live view" do
+      assert %Rendered{
+               static: ["pre: ", "\n", "post: ", ""],
+               dynamic: [
+                 "pre",
+                 %Rendered{dynamic: ["inner"], static: ["live: ", ""]},
+                 "post"
+               ]
+             } = Phoenix.View.render(View, "live_with_live.html", @assigns)
+    end
+
+    test "renders live engine with nested dead view" do
+      assert %Rendered{
+               static: ["pre: ", "\n", "post: ", ""],
+               dynamic: ["pre", ["dead: ", "inner"], "post"]
+             } = Phoenix.View.render(View, "live_with_dead.html", @assigns)
+    end
+
+    test "renders dead engine with nested live view" do
+      assert Phoenix.View.render(View, "dead_with_live.html", @assigns) ==
+               {:safe, ["pre: ", "pre", "\n", ["live: ", "inner", ""], "post: ", "post"]}
+    end
+  end
+
   defp eval(string, assigns \\ %{}) do
-    EEx.eval_string(string, [assigns: assigns],
-      file: __ENV__.file,
-      engine: Phoenix.LiveView.Engine
-    )
+    EEx.eval_string(string, [assigns: assigns], file: __ENV__.file, engine: Engine)
   end
 
   defp changed(string, assigns, changed) do

@@ -1,4 +1,4 @@
-defmodule Phoenix.LiveView.Engine.MixProject do
+defmodule LiveEEx.MixProject do
   use Mix.Project
 
   def project do
@@ -21,7 +21,9 @@ defmodule Phoenix.LiveView.Engine.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:phoenix_html, github: "phoenixframework/phoenix_html"}
+      {:phoenix, "~> 1.4.1-dev", github: "phoenixframework/phoenix", branch: "v1.4"},
+      {:phoenix_html, "~> 2.13", github: "phoenixframework/phoenix_html"},
+      {:jason, ">= 0.0.0"}
     ]
   end
 end
