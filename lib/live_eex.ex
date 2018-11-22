@@ -4,6 +4,18 @@ defmodule LiveEEx do
 
   defmodule Rendered do
     defstruct [:static, :dynamic]
+
+    def to_iodata(%{static: static, dynamic: dynamic}) do
+      to_iodata(static, dynamic, [])
+    end
+
+    defp to_iodata([static_head | static_tail], [dynamic_head | dynamic_tail], acc) do
+      to_iodata(static_tail, dynamic_tail, [dynamic_head, static_head | acc])
+    end
+
+    defp to_iodata([static_head], [], acc) do
+      Enum.reverse([static_head | acc])
+    end
   end
 
   @behaviour EEx.Engine
@@ -34,12 +46,12 @@ defmodule LiveEEx do
   def handle_body(state) do
     %{static: static, dynamic: dynamic} = state
 
-    static = Enum.reverse(static)
+    binaries = reverse_static(static)
     dynamic = Enum.reverse(dynamic)
 
-    map =
+    vars =
       for {counter, _} when is_integer(counter) <- dynamic do
-        {counter, var(counter)}
+        var(counter)
       end
 
     block =
@@ -49,12 +61,12 @@ defmodule LiveEEx do
 
         {counter, ast} ->
           var = var(counter)
-          quote do: (unquote(var) = unquote(traverse(ast)))
+          quote do: unquote(var) = unquote(traverse(ast))
       end)
 
     rendered =
       quote do
-        %LiveEEx.Rendered{static: unquote(static), dynamic: %{unquote_splicing(map)}}
+        %LiveEEx.Rendered{static: unquote(binaries), dynamic: unquote(vars)}
       end
 
     {:__block__, [], block ++ [rendered]}
@@ -143,6 +155,25 @@ defmodule LiveEEx do
   end
 
   ## Traversal
+
+  defp reverse_static([dynamic | static]) when is_integer(dynamic),
+    do: reverse_static(static, [""])
+
+  defp reverse_static(static),
+    do: reverse_static(static, [])
+
+  defp reverse_static([static, dynamic | rest], acc)
+       when is_binary(static) and is_integer(dynamic),
+       do: reverse_static(rest, [static | acc])
+
+  defp reverse_static([dynamic | rest], acc) when is_integer(dynamic),
+    do: reverse_static(rest, ["" | acc])
+
+  defp reverse_static([static], acc) when is_binary(static),
+    do: [static | acc]
+
+  defp reverse_static([], acc),
+    do: ["" | acc]
 
   defp traverse(expr) do
     Macro.prewalk(expr, &handle_assign/1)

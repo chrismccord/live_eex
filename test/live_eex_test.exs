@@ -4,74 +4,119 @@ defmodule LiveEExTest do
   def safe(do: {:safe, _} = safe), do: safe
   def unsafe(do: {:safe, content}), do: content
 
-  test "escapes HTML" do
-    template = """
-    <start> <%= "<escaped>" %>
-    """
+  describe "rendering" do
+    test "escapes HTML" do
+      template = """
+      <start> <%= "<escaped>" %>
+      """
 
-    assert eval(template) == "<start> &lt;escaped&gt;\n"
+      assert render(template) == "<start> &lt;escaped&gt;\n"
+    end
+
+    test "escapes HTML from nested content" do
+      template = """
+      <%= LiveEExTest.unsafe do %>
+        <foo>
+      <% end %>
+      """
+
+      assert render(template) == "\n  &lt;foo&gt;\n\n"
+    end
+
+    test "does not escape safe expressions" do
+      assert render("Safe <%= {:safe, \"<value>\"} %>") == "Safe <value>"
+    end
+
+    test "nested content is always safe" do
+      template = """
+      <%= LiveEExTest.safe do %>
+        <foo>
+      <% end %>
+      """
+
+      assert render(template) == "\n  <foo>\n\n"
+
+      template = """
+      <%= LiveEExTest.safe do %>
+        <%= "<foo>" %>
+      <% end %>
+      """
+
+      assert render(template) == "\n  &lt;foo&gt;\n\n"
+    end
+
+    test "handles assigns" do
+      assert render("<%= @foo %>", %{foo: "<hello>"}) == "&lt;hello&gt;"
+    end
+
+    test "supports non-output expressions" do
+      template = """
+      <% foo = @foo %>
+      <%= foo %>
+      """
+
+      assert render(template, %{foo: "<hello>"}) == "\n&lt;hello&gt;\n"
+    end
+
+    test "raises ArgumentError for missing assigns" do
+      assert_raise ArgumentError,
+                   ~r/assign @foo not available in eex template.*Available assigns: \[:bar\]/s,
+                   fn -> render("<%= @foo %>", %{bar: true}) end
+    end
   end
 
-  test "escapes HTML from nested content" do
-    template = """
-    <%= LiveEExTest.unsafe do %>
-      <foo>
-    <% end %>
-    """
+  describe "rendered structure" do
+    test "contains two static parts and one dynamic" do
+      %{static: static, dynamic: dynamic} = eval("foo<%= 123 %>bar")
+      assert dynamic == ["123"]
+      assert static == ["foo", "bar"]
+    end
 
-    assert eval(template) == "\n  &lt;foo&gt;\n\n"
-  end
+    test "contains one static part at the beginning and one dynamic" do
+      %{static: static, dynamic: dynamic} = eval("foo<%= 123 %>")
+      assert dynamic == ["123"]
+      assert static == ["foo", ""]
+    end
 
-  test "does not escape safe expressions" do
-    assert eval("Safe <%= {:safe, \"<value>\"} %>") == "Safe <value>"
-  end
+    test "contains one static part at the end and one dynamic" do
+      %{static: static, dynamic: dynamic} = eval("<%= 123 %>bar")
+      assert dynamic == ["123"]
+      assert static == ["", "bar"]
+    end
 
-  test "nested content is always safe" do
-    template = """
-    <%= LiveEExTest.safe do %>
-      <foo>
-    <% end %>
-    """
+    test "contains one dynamic only" do
+      %{static: static, dynamic: dynamic} = eval("<%= 123 %>")
+      assert dynamic == ["123"]
+      assert static == ["", ""]
+    end
 
-    assert eval(template) == "\n  <foo>\n\n"
+    test "contains two dynamics only" do
+      %{static: static, dynamic: dynamic} = eval("<%= 123 %><%= 456 %>")
+      assert dynamic == ["123", "456"]
+      assert static == ["", "", ""]
+    end
 
-    template = """
-    <%= LiveEExTest.safe do %>
-      <%= "<foo>" %>
-    <% end %>
-    """
+    test "contains two static parts and two dynamics" do
+      %{static: static, dynamic: dynamic} = eval("foo<%= 123 %><%= 456 %>bar")
+      assert dynamic == ["123", "456"]
+      assert static == ["foo", "", "bar"]
+    end
 
-    assert eval(template) == "\n  &lt;foo&gt;\n\n"
-  end
-
-  test "handles assigns" do
-    assert eval("<%= @foo %>", %{foo: "<hello>"}) == "&lt;hello&gt;"
-  end
-
-  test "supports non-output expressions" do
-    template = """
-    <% foo = @foo %>
-    <%= foo %>
-    """
-
-    assert eval(template, %{foo: "<hello>"}) == "\n&lt;hello&gt;\n"
-  end
-
-  test "raises ArgumentError for missing assigns" do
-    assert_raise ArgumentError,
-                 ~r/assign @foo not available in eex template.*Available assigns: \[:bar\]/s,
-                 fn -> eval("<%= @foo %>", %{bar: true}) end
+    test "contains three static parts and two dynamics" do
+      %{static: static, dynamic: dynamic} = eval("foo<%= 123 %>bar<%= 456 %>baz")
+      assert dynamic == ["123", "456"]
+      assert static == ["foo", "bar", "baz"]
+    end
   end
 
   defp eval(string, assigns \\ %{}) do
-    %LiveEEx.Rendered{static: static, dynamic: dynamic} =
-      EEx.eval_string(string, [assigns: assigns], file: __ENV__.file, engine: LiveEEx)
+    EEx.eval_string(string, [assigns: assigns], file: __ENV__.file, engine: LiveEEx)
+  end
 
-    static
-    |> Enum.map(fn
-      binary when is_binary(binary) -> binary
-      integer when is_integer(integer) -> Map.fetch!(dynamic, integer)
-    end)
+  defp render(string, assigns \\ %{}) do
+    string
+    |> eval(assigns)
+    |> LiveEEx.Rendered.to_iodata()
     |> IO.iodata_to_binary()
   end
 end
