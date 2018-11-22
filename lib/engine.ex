@@ -292,9 +292,37 @@ defmodule Phoenix.LiveView.Engine do
     {expr, tainted, Map.put(assigns, name, true)}
   end
 
+  # Vars always taint
+  defp analyze({name, _, context} = expr, _tainted, assigns)
+       when is_atom(name) and is_atom(context) do
+    {expr, true, assigns}
+  end
+
+  # Lexical forms always taint
   defp analyze({lexical_form, _, [_]} = expr, _tainted, assigns)
        when lexical_form in @lexical_forms do
     {expr, true, assigns}
+  end
+
+  # with/for/fn never taint regardless of arity
+  defp analyze({special_form, meta, args}, tainted, assigns)
+       when special_form in [:with, :for, :fn] do
+    {args, _tainted, assigns} = analyze_list(args, tainted, assigns, [])
+    {{special_form, meta, args}, tainted, assigns}
+  end
+
+  # case/2 only taint first arg
+  defp analyze({:case, meta, [expr, blocks]}, tainted, assigns) do
+    {expr, tainted, assigns} = analyze(expr, tainted, assigns)
+    {blocks, _tainted, assigns} = analyze(blocks, tainted, assigns)
+    {{:case, meta, [expr, blocks]}, tainted, assigns}
+  end
+
+  # try/receive/cond/&/1 never taint
+  defp analyze({special_form, meta, [blocks]}, tainted, assigns)
+       when special_form in [:try, :receive, :cond, :&] do
+    {blocks, _tainted, assigns} = analyze(blocks, tainted, assigns)
+    {{special_form, meta, [blocks]}, tainted, assigns}
   end
 
   defp analyze({lexical_form, _, [_, _]} = expr, _tainted, assigns)
@@ -302,14 +330,9 @@ defmodule Phoenix.LiveView.Engine do
     {expr, true, assigns}
   end
 
-  defp analyze({name, _, context} = expr, _tainted, assigns)
-       when is_atom(name) and is_atom(context) do
-    {expr, true, assigns}
-  end
-
   defp analyze({left, meta, args}, tainted, assigns) do
     {left, tainted, assigns} = analyze(left, tainted, assigns)
-    {args, tainted, assigns} = analyze(args, tainted, assigns)
+    {args, tainted, assigns} = analyze_list(args, tainted, assigns, [])
     {{left, meta, args}, tainted, assigns}
   end
 

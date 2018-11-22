@@ -145,6 +145,13 @@ defmodule Phoenix.LiveView.EngineTest do
       assert changed(template, %{foo: 123, bar: 456}, %{}) == ["579"]
       assert changed(template, %{foo: 123, bar: 456}, %{foo: true, bar: true}) == ["579"]
     end
+
+    test "does not render dynamic if it has variables inside comprehensions" do
+      template = "<%= for foo <- @foo, do: foo %>"
+      assert changed(template, %{foo: ~w(1 2 3)}, nil) == [["1", "2", "3"]]
+      assert changed(template, %{foo: ~w(1 2 3)}, %{}) == [["1", "2", "3"]]
+      assert changed(template, %{foo: ~w(1 2 3)}, %{foo: true}) == [nil]
+    end
   end
 
   describe "fingerprints" do
