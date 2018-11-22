@@ -61,27 +61,9 @@ defmodule LiveEEx do
           ast
 
         {counter, ast} ->
-          var = var(counter)
-
-          case analyze(ast) do
-            {ast, []} ->
-              quote do
-                unquote(var) =
-                  case __changed__ do
-                    %{} -> nil
-                    _ -> unquote(ast)
-                  end
-              end
-
-            {ast, assigns} ->
-              quote do
-                unquote(var) =
-                  case unquote(changed_assigns(assigns)) do
-                    true -> unquote(ast)
-                    false -> nil
-                  end
-              end
-          end
+          ast
+          |> analyze()
+          |> to_conditional_var(var(counter))
       end)
 
     prelude =
@@ -106,7 +88,7 @@ defmodule LiveEEx do
   @impl true
   def handle_expr(%{root: true} = state, "=", ast) do
     %{static: static, dynamic: dynamic, vars_count: vars_count} = state
-    tuple = {vars_count, to_safe(ast)}
+    tuple = {vars_count, ast}
 
     %{
       state
@@ -179,7 +161,7 @@ defmodule LiveEEx do
     end
   end
 
-  ## Traversal/analyzis
+  ## Static traversal
 
   defp reverse_static([dynamic | static]) when is_integer(dynamic),
     do: reverse_static(static, [""])
@@ -200,22 +182,81 @@ defmodule LiveEEx do
   defp reverse_static([], acc),
     do: ["" | acc]
 
+  ## Dynamic traversal
+
+  @lexical_forms [:import, :alias, :require]
+
   defp analyze(expr) do
-    {expr, assigns} = Macro.prewalk(expr, %{}, &analyze/2)
-    {expr, Map.keys(assigns)}
+    case Macro.traverse(expr, {make_ref(), %{}}, &prewalk/2, &postwalk/2) do
+      {expr, {_, :tainted}} -> {expr, :tainted}
+      {expr, {_, assigns}} -> {expr, Map.keys(assigns)}
+    end
   end
 
-  defp analyze({:@, meta, [{name, _, context}]}, assigns)
+  defp prewalk({:@, meta, [{name, _, context}]}, {ref, assigns})
        when is_atom(name) and is_atom(context) do
-    expr =
-      quote line: meta[:line] || 0 do
+    line = meta[:line] || 0
+    {{ref, {line, name}}, {ref, put_unless_tainted(assigns, name)}}
+  end
+
+  defp prewalk({lexical_form, _, [_]} = expr, {ref, _assigns})
+       when lexical_form in @lexical_forms do
+    {expr, {ref, :tainted}}
+  end
+
+  defp prewalk({lexical_form, _, [_, _]} = expr, {ref, _assigns})
+       when lexical_form in @lexical_forms do
+    {expr, {ref, :tainted}}
+  end
+
+  defp prewalk({name, _, context} = expr, {ref, _assigns})
+       when is_atom(name) and is_atom(context) do
+    {expr, {ref, :tainted}}
+  end
+
+  defp prewalk(arg, {ref, assigns}) do
+    {arg, {ref, assigns}}
+  end
+
+  defp postwalk({ref, {line, name}}, {ref, assigns}) do
+    ast =
+      quote line: line do
         unquote(__MODULE__).fetch_assign!(var!(assigns), unquote(name))
       end
 
-    {expr, Map.put(assigns, name, true)}
+    {ast, {ref, assigns}}
   end
 
-  defp analyze(arg, assigns), do: {arg, assigns}
+  defp postwalk(arg, {ref, assigns}) do
+    {arg, {ref, assigns}}
+  end
+
+  defp put_unless_tainted(:tainted, _name), do: :tainted
+  defp put_unless_tainted(assigns, name), do: Map.put(assigns, name, true)
+
+  defp to_conditional_var({ast, :tainted}, var) do
+    quote do: unquote(var) = unquote(to_safe(ast))
+  end
+
+  defp to_conditional_var({ast, []}, var) do
+    quote do
+      unquote(var) =
+        case __changed__ do
+          %{} -> nil
+          _ -> unquote(to_safe(ast))
+        end
+    end
+  end
+
+  defp to_conditional_var({ast, assigns}, var) do
+    quote do
+      unquote(var) =
+        case unquote(changed_assigns(assigns)) do
+          true -> unquote(to_safe(ast))
+          false -> nil
+        end
+    end
+  end
 
   defp changed_assigns(assigns) do
     assigns

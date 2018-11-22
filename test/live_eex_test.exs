@@ -111,14 +111,37 @@ defmodule LiveEExTest do
 
   describe "change tracking" do
     test "does not render dynamic if it is unchanged" do
-      assert changed("<%= @foo %>", %{foo: 123}, nil) == ["123"]
-      assert changed("<%= @foo %>", %{foo: 123}, %{}) == ["123"]
-      assert changed("<%= @foo %>", %{foo: 123}, %{foo: true}) == [nil]
+      template = "<%= @foo %>"
+      assert changed(template, %{foo: 123}, nil) == ["123"]
+      assert changed(template, %{foo: 123}, %{}) == ["123"]
+      assert changed(template, %{foo: 123}, %{foo: true}) == [nil]
     end
 
     test "does not render dynamic without assigns" do
-      assert changed("<%= 1 + 2 %>", %{}, nil) == ["3"]
-      assert changed("<%= 1 + 2 %>", %{}, %{}) == [nil]
+      template = "<%= 1 + 2 %>"
+      assert changed(template, %{}, nil) == ["3"]
+      assert changed(template, %{}, %{}) == [nil]
+    end
+
+    test "renders dynamic if it has a lexical form" do
+      template = "<%= import List %><%= flatten(@foo) %>"
+      assert changed(template, %{foo: '123'}, nil) == ["Elixir.List", '123']
+      assert changed(template, %{foo: '123'}, %{}) == ["Elixir.List", '123']
+      assert changed(template, %{foo: '123'}, %{foo: true}) == ["Elixir.List", nil]
+    end
+
+    test "renders dynamic if it has variables" do
+      template = "<%= foo = @foo %><%= foo %>"
+      assert changed(template, %{foo: 123}, nil) == ["123", "123"]
+      assert changed(template, %{foo: 123}, %{}) == ["123", "123"]
+      assert changed(template, %{foo: 123}, %{foo: true}) == ["123", "123"]
+    end
+
+    test "renders dynamic if it has variables regardless of assigns" do
+      template = "<% bar = @bar %><%= @foo + bar %>"
+      assert changed(template, %{foo: 123, bar: 456}, nil) == ["579"]
+      assert changed(template, %{foo: 123, bar: 456}, %{}) == ["579"]
+      assert changed(template, %{foo: 123, bar: 456}, %{foo: true, bar: true}) == ["579"]
     end
   end
 
