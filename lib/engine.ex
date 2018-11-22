@@ -276,52 +276,65 @@ defmodule Phoenix.LiveView.Engine do
   @lexical_forms [:import, :alias, :require]
 
   defp analyze(expr) do
-    case Macro.traverse(expr, {make_ref(), %{}}, &prewalk/2, &postwalk/2) do
-      {expr, {_, :tainted}} -> {expr, :tainted}
-      {expr, {_, assigns}} -> {expr, Map.keys(assigns)}
+    case analyze(expr, false, %{}) do
+      {expr, true, _assigns} -> {expr, :tainted}
+      {expr, false, assigns} -> {expr, Map.keys(assigns)}
     end
   end
 
-  defp prewalk({:@, meta, [{name, _, context}]}, {ref, assigns})
+  defp analyze({:@, meta, [{name, _, context}]}, tainted, assigns)
        when is_atom(name) and is_atom(context) do
-    line = meta[:line] || 0
-    {{ref, {line, name}}, {ref, put_unless_tainted(assigns, name)}}
-  end
-
-  defp prewalk({lexical_form, _, [_]} = expr, {ref, _assigns})
-       when lexical_form in @lexical_forms do
-    {expr, {ref, :tainted}}
-  end
-
-  defp prewalk({lexical_form, _, [_, _]} = expr, {ref, _assigns})
-       when lexical_form in @lexical_forms do
-    {expr, {ref, :tainted}}
-  end
-
-  defp prewalk({name, _, context} = expr, {ref, _assigns})
-       when is_atom(name) and is_atom(context) do
-    {expr, {ref, :tainted}}
-  end
-
-  defp prewalk(arg, {ref, assigns}) do
-    {arg, {ref, assigns}}
-  end
-
-  defp postwalk({ref, {line, name}}, {ref, assigns}) do
-    ast =
-      quote line: line do
+    expr =
+      quote line: meta[:line] || 0 do
         unquote(__MODULE__).fetch_assign!(var!(assigns), unquote(name))
       end
 
-    {ast, {ref, assigns}}
+    {expr, tainted, Map.put(assigns, name, true)}
   end
 
-  defp postwalk(arg, {ref, assigns}) do
-    {arg, {ref, assigns}}
+  defp analyze({lexical_form, _, [_]} = expr, _tainted, assigns)
+       when lexical_form in @lexical_forms do
+    {expr, true, assigns}
   end
 
-  defp put_unless_tainted(:tainted, _name), do: :tainted
-  defp put_unless_tainted(assigns, name), do: Map.put(assigns, name, true)
+  defp analyze({lexical_form, _, [_, _]} = expr, _tainted, assigns)
+       when lexical_form in @lexical_forms do
+    {expr, true, assigns}
+  end
+
+  defp analyze({name, _, context} = expr, _tainted, assigns)
+       when is_atom(name) and is_atom(context) do
+    {expr, true, assigns}
+  end
+
+  defp analyze({left, meta, args}, tainted, assigns) do
+    {left, tainted, assigns} = analyze(left, tainted, assigns)
+    {args, tainted, assigns} = analyze(args, tainted, assigns)
+    {{left, meta, args}, tainted, assigns}
+  end
+
+  defp analyze({left, right}, tainted, assigns) do
+    {left, tainted, assigns} = analyze(left, tainted, assigns)
+    {right, tainted, assigns} = analyze(right, tainted, assigns)
+    {{left, right}, tainted, assigns}
+  end
+
+  defp analyze([_ | _] = list, tainted, assigns) do
+    analyze_list(list, tainted, assigns, [])
+  end
+
+  defp analyze(other, tainted, assigns) do
+    {other, tainted, assigns}
+  end
+
+  defp analyze_list([head | tail], tainted, assigns, acc) do
+    {head, tainted, assigns} = analyze(head, tainted, assigns)
+    analyze_list(tail, tainted, assigns, [head | acc])
+  end
+
+  defp analyze_list([], tainted, assigns, acc) do
+    {Enum.reverse(acc), tainted, assigns}
+  end
 
   @extra_clauses (quote do
                     %{__struct__: Phoenix.LiveView.Rendered} = other -> other
