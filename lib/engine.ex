@@ -1,10 +1,19 @@
-defmodule LiveEEx do
+defmodule Phoenix.LiveView.Rendered do
   @moduledoc """
+  The struct returned by .leex templates.
+
+  See a description about its fields and use cases
+  in `Phoenix.LiveView.Engine` docs.
   """
 
-  defmodule Rendered do
-    defstruct [:static, :dynamic]
+  defstruct [:static, :dynamic]
 
+  @type t :: %__MODULE__{
+    static: [String.t],
+    dynamic: [String.t | nil | t]
+  }
+
+  defimpl Phoenix.HTML.Safe do
     def to_iodata(%{static: static, dynamic: dynamic}) do
       to_iodata(static, dynamic, [])
     end
@@ -17,6 +26,11 @@ defmodule LiveEEx do
       Enum.reverse([static_head | acc])
     end
   end
+end
+
+defmodule Phoenix.LiveView.Engine do
+  @moduledoc """
+  """
 
   @behaviour EEx.Engine
 
@@ -73,7 +87,7 @@ defmodule LiveEEx do
 
     rendered =
       quote do
-        %LiveEEx.Rendered{static: unquote(binaries), dynamic: unquote(vars)}
+        %Phoenix.LiveView.Rendered{static: unquote(binaries), dynamic: unquote(vars)}
       end
 
     {:__block__, [], [prelude | block] ++ [rendered]}

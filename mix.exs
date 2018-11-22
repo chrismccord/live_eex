@@ -1,4 +1,4 @@
-defmodule LiveEEx.MixProject do
+defmodule Phoenix.LiveView.Engine.MixProject do
   use Mix.Project
 
   def project do

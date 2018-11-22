@@ -1,4 +1,4 @@
-defmodule LiveEExTest do
+defmodule Phoenix.LiveView.EngineTest do
   use ExUnit.Case, async: true
 
   def safe(do: {:safe, _} = safe), do: safe
@@ -15,7 +15,7 @@ defmodule LiveEExTest do
 
     test "escapes HTML from nested content" do
       template = """
-      <%= LiveEExTest.unsafe do %>
+      <%= Phoenix.LiveView.EngineTest.unsafe do %>
         <foo>
       <% end %>
       """
@@ -29,7 +29,7 @@ defmodule LiveEExTest do
 
     test "nested content is always safe" do
       template = """
-      <%= LiveEExTest.safe do %>
+      <%= Phoenix.LiveView.EngineTest.safe do %>
         <foo>
       <% end %>
       """
@@ -37,7 +37,7 @@ defmodule LiveEExTest do
       assert render(template) == "\n  <foo>\n\n"
 
       template = """
-      <%= LiveEExTest.safe do %>
+      <%= Phoenix.LiveView.EngineTest.safe do %>
         <%= "<foo>" %>
       <% end %>
       """
@@ -146,7 +146,10 @@ defmodule LiveEExTest do
   end
 
   defp eval(string, assigns \\ %{}) do
-    EEx.eval_string(string, [assigns: assigns], file: __ENV__.file, engine: LiveEEx)
+    EEx.eval_string(string, [assigns: assigns],
+      file: __ENV__.file,
+      engine: Phoenix.LiveView.Engine
+    )
   end
 
   defp changed(string, assigns, changed) do
@@ -157,7 +160,7 @@ defmodule LiveEExTest do
   defp render(string, assigns \\ %{}) do
     string
     |> eval(assigns)
-    |> LiveEEx.Rendered.to_iodata()
+    |> Phoenix.HTML.Safe.to_iodata()
     |> IO.iodata_to_binary()
   end
 end
