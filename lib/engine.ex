@@ -1,3 +1,33 @@
+defmodule Phoenix.LiveView.Comprehension do
+  @moduledoc """
+  The struct returned by for-comprehensions in .leex templates.
+
+  See a description about its fields and use cases
+  in `Phoenix.LiveView.Engine` docs.
+  """
+
+  defstruct [:static, :dynamics]
+
+  @type t :: %__MODULE__{
+          static: [String.t()],
+          dynamics: [[iodata()]]
+        }
+
+  defimpl Phoenix.HTML.Safe do
+    def to_iodata(%Phoenix.LiveView.Comprehension{static: static, dynamics: dynamics}) do
+      for dynamic <- dynamics, do: to_iodata(static, dynamic, [])
+    end
+
+    defp to_iodata([static_head | static_tail], [dynamic_head | dynamic_tail], acc) do
+      to_iodata(static_tail, dynamic_tail, [dynamic_head, static_head | acc])
+    end
+
+    defp to_iodata([static_head], [], acc) do
+      Enum.reverse([static_head | acc])
+    end
+  end
+end
+
 defmodule Phoenix.LiveView.Rendered do
   @moduledoc """
   The struct returned by .leex templates.
@@ -10,13 +40,19 @@ defmodule Phoenix.LiveView.Rendered do
 
   @type t :: %__MODULE__{
           static: [String.t()],
-          dynamic: [iodata() | nil | t],
+          dynamic: [
+            nil | iodata() | Phoenix.LiveView.Rendered.t() | Phoenix.LiveView.Comprehension.t()
+          ],
           fingerprint: binary()
         }
 
   defimpl Phoenix.HTML.Safe do
-    def to_iodata(%{static: static, dynamic: dynamic}) do
+    def to_iodata(%Phoenix.LiveView.Rendered{static: static, dynamic: dynamic}) do
       to_iodata(static, dynamic, [])
+    end
+
+    def to_iodata(%Phoenix.LiveView.Comprehension{} = for) do
+      Phoenix.HTML.Safe.Phoenix.LiveView.Comprehension.to_iodata(for)
     end
 
     def to_iodata(nil) do
@@ -38,7 +74,7 @@ defmodule Phoenix.LiveView.Rendered do
 end
 
 defmodule Phoenix.LiveView.Engine do
-  @moduledoc """
+  @moduledoc ~S"""
   The `.leex` (Live EEx) template engine that tracks changes.
 
   On the docs below, we will explain how it works internally.
@@ -111,7 +147,8 @@ defmodule Phoenix.LiveView.Engine do
 
     1. iodata - which is the dynamic content
     2. nil - the dynamic content did not change, see "Tracking changes" below
-    3. another `Phoenix.LiveView.Rendered`, see "Nesting and fingerprinting" below
+    3. another `Phoenix.LiveView.Rendered` struct, see "Nesting and fingerprinting" below
+    4. a `Phoenix.LiveView.Comprehension` struct, see "Comprehensions" below
 
   When you render a `.leex` template, you can convert the
   rendered structure to iodata by intercalating the static
@@ -152,8 +189,8 @@ defmodule Phoenix.LiveView.Engine do
 
   ## Nesting and fingerprinting
 
-  `Phoenix.LiveView` also tracks changes across live
-  templates. So therefore, if your view has this:
+  `Phoenix.LiveView` also tracks changes across `.leex`
+  templates. Therefore, if your view has this:
 
       <%= render "form.html", assigns %>
 
@@ -175,6 +212,39 @@ defmodule Phoenix.LiveView.Engine do
   it. If the fingerprints are equal, you have the same
   template, and therefore it is possible to only transmit
   its changes.
+
+  ## Comprehensions
+
+  Another optimization done by `.leex` templates is to
+  track comprehensions. If your code has this:
+
+      <%= for point <- @points do %>
+        x: <%= point.x %>
+        y: <%= point.y %>
+      <% end %>
+
+  Instead of rendering all points with both static and
+  dynamic parts, it returns a `Phoenix.LiveView.Comprehension`
+  struct with the static parts, that are shared across all
+  points, and a list of dynamics to be interpolated inside
+  the static parts. If `@points` is a list with `%{x: 1, y: 2}`
+  and `%{x: 3, y: 4}`, the expression above would return:
+
+      %Phoenix.LiveView.Comprehension{
+        static: ["\n  x: ", "\n  y: ", "\n"],
+        dynamics: [
+          ["1", "2"],
+          ["3", "4"]
+        ]
+      }
+
+  This allows `.leex` templates to drastically optimize
+  the data sent by comprehensions, as the static parts
+  are emitted once, regardless of the number of items.
+
+  The list of dynamics is always a list of iodatas, as we
+  only perform change tracking at the root and never inside
+  `case`, `cond`, `comprehensions`, etc.
   """
 
   @behaviour Phoenix.Template.Engine
@@ -265,13 +335,7 @@ defmodule Phoenix.LiveView.Engine do
   def handle_expr(%{root: true} = state, "=", ast) do
     %{static: static, dynamic: dynamic, vars_count: vars_count} = state
     tuple = {vars_count, ast}
-
-    %{
-      state
-      | dynamic: [tuple | dynamic],
-        static: [vars_count | static],
-        vars_count: vars_count + 1
-    }
+    %{state | dynamic: [tuple | dynamic], static: [:dynamic | static], vars_count: vars_count + 1}
   end
 
   def handle_expr(%{root: true} = state, "", ast) do
@@ -321,9 +385,39 @@ defmodule Phoenix.LiveView.Engine do
     quote line: line, do: Phoenix.HTML.Safe.List.to_iodata(unquote(literal))
   end
 
-  # We need to check at runtime and we do so by
-  # optimizing common cases.
+  # Emit a special data structure for comprehensions
+  defp to_safe({:for, meta, args} = expr, line, extra_clauses) do
+    with {filters, [[do: {:__block__, _, block}]]} <- Enum.split(args, -1),
+         {exprs, [{:safe, iodata}]} <- Enum.split(block, -1) do
+      # Unpack the safe tuple back into binaries and dynamics
+      {static, dynamics} =
+        Enum.reduce(iodata, {[], []}, fn
+          binary, {static, dynamic} when is_binary(binary) ->
+            {[binary | static], dynamic}
+
+          var, {static, dynamic} when is_tuple(var) ->
+            {[:dynamic | static], [var | dynamic]}
+        end)
+
+      binaries = reverse_static(static)
+      dynamics = Enum.reverse(dynamics)
+      for = {:for, meta, filters ++ [[do: {:__block__, [], exprs ++ [dynamics]}]]}
+
+      quote do
+        for = unquote(for)
+        %Phoenix.LiveView.Comprehension{static: unquote(binaries), dynamics: for}
+      end
+    else
+      _ -> to_safe_catch_all(expr, line, extra_clauses)
+    end
+  end
+
+  # We need to check at runtime and we do so by optimizing common cases.
   defp to_safe(expr, line, extra_clauses) do
+    to_safe_catch_all(expr, line, extra_clauses)
+  end
+
+  defp to_safe_catch_all(expr, line, extra_clauses) do
     # Keep stacktraces for protocol dispatch...
     fallback = quote line: line, do: Phoenix.HTML.Safe.to_iodata(other)
 
@@ -342,17 +436,16 @@ defmodule Phoenix.LiveView.Engine do
 
   ## Static traversal
 
-  defp reverse_static([dynamic | static]) when is_integer(dynamic),
+  defp reverse_static([:dynamic | static]),
     do: reverse_static(static, [""])
 
   defp reverse_static(static),
     do: reverse_static(static, [])
 
-  defp reverse_static([static, dynamic | rest], acc)
-       when is_binary(static) and is_integer(dynamic),
-       do: reverse_static(rest, [static | acc])
+  defp reverse_static([static, :dynamic | rest], acc) when is_binary(static),
+    do: reverse_static(rest, [static | acc])
 
-  defp reverse_static([dynamic | rest], acc) when is_integer(dynamic),
+  defp reverse_static([:dynamic | rest], acc),
     do: reverse_static(rest, ["" | acc])
 
   defp reverse_static([static], acc) when is_binary(static),
