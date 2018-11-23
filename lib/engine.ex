@@ -43,7 +43,7 @@ defmodule Phoenix.LiveView.Rendered do
           dynamic: [
             nil | iodata() | Phoenix.LiveView.Rendered.t() | Phoenix.LiveView.Comprehension.t()
           ],
-          fingerprint: binary()
+          fingerprint: integer()
         }
 
   defimpl Phoenix.HTML.Safe do
@@ -287,7 +287,7 @@ defmodule Phoenix.LiveView.Engine do
 
     # We compute the term to binary instead of passing all binaries
     # because we need to take into account the positions of dynamics.
-    fingerprint =
+    <<fingerprint::8*16>> =
       binaries
       |> :erlang.term_to_binary()
       |> :erlang.md5()

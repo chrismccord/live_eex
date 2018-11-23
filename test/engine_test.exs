@@ -195,10 +195,10 @@ defmodule Phoenix.LiveView.EngineTest do
   end
 
   describe "fingerprints" do
-    test "are 16 bytes long and independent of dynamic" do
+    test "are integers" do
       rendered1 = eval("foo<%= @bar %>baz", %{bar: 123})
       rendered2 = eval("foo<%= @bar %>baz", %{bar: 456})
-      assert byte_size(rendered1.fingerprint) == 16
+      assert is_integer(rendered1.fingerprint)
       assert rendered1.fingerprint == rendered2.fingerprint
     end
 
