@@ -176,7 +176,13 @@ defmodule Phoenix.LiveView.EngineTest do
       assert rendered1.fingerprint == rendered2.fingerprint
     end
 
-    test "are different on templates with same static but different dynamic" do
+    test "are the same on templates with same static but same count of dynamic" do
+      rendered1 = eval("foo<%= @bar1 %>baz", %{bar1: 123})
+      rendered2 = eval("foo<%= @bar2 %>baz", %{bar2: 123})
+      assert rendered1.fingerprint == rendered2.fingerprint
+    end
+
+    test "are different on templates with same static but different count of dynamic" do
       rendered1 = eval("foo<%= @bar %>baz", %{bar: 123})
       rendered2 = eval("foobaz", %{bar: 123})
       assert rendered1.fingerprint != rendered2.fingerprint
