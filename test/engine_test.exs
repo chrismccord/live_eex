@@ -141,8 +141,8 @@ defmodule Phoenix.LiveView.EngineTest do
     test "does not render dynamic if it is unchanged" do
       template = "<%= @foo %>"
       assert changed(template, %{foo: 123}, nil) == ["123"]
-      assert changed(template, %{foo: 123}, %{}) == ["123"]
-      assert changed(template, %{foo: 123}, %{foo: true}) == [nil]
+      assert changed(template, %{foo: 123}, %{}) == [nil]
+      assert changed(template, %{foo: 123}, %{foo: true}) == ["123"]
     end
 
     test "does not render dynamic without assigns" do
@@ -154,8 +154,8 @@ defmodule Phoenix.LiveView.EngineTest do
     test "renders dynamic if it has a lexical form" do
       template = "<%= import List %><%= flatten(@foo) %>"
       assert changed(template, %{foo: '123'}, nil) == ["Elixir.List", '123']
-      assert changed(template, %{foo: '123'}, %{}) == ["Elixir.List", '123']
-      assert changed(template, %{foo: '123'}, %{foo: true}) == ["Elixir.List", nil]
+      assert changed(template, %{foo: '123'}, %{}) == ["Elixir.List", nil]
+      assert changed(template, %{foo: '123'}, %{foo: true}) == ["Elixir.List", '123']
     end
 
     test "does not render dynamic if it has variables from assigns" do
@@ -175,8 +175,8 @@ defmodule Phoenix.LiveView.EngineTest do
     test "does not render dynamic if it has variables inside special form" do
       template = "<%= cond do foo = @foo -> foo end %>"
       assert changed(template, %{foo: 123}, nil) == ["123"]
-      assert changed(template, %{foo: 123}, %{}) == ["123"]
-      assert changed(template, %{foo: 123}, %{foo: true}) == [nil]
+      assert changed(template, %{foo: 123}, %{}) == [nil]
+      assert changed(template, %{foo: 123}, %{foo: true}) == ["123"]
     end
 
     test "renders dynamic if it uses assigns" do
@@ -189,8 +189,8 @@ defmodule Phoenix.LiveView.EngineTest do
     test "does not renders dynamic if it has variables from assign" do
       template = "<% foo = @foo %><%= cond do bar = foo -> bar end %>"
       assert changed(template, %{foo: 123}, nil) == ["123"]
-      assert changed(template, %{foo: 123}, %{}) == ["123"]
-      assert changed(template, %{foo: 123}, %{foo: true}) == [nil]
+      assert changed(template, %{foo: 123}, %{}) == [nil]
+      assert changed(template, %{foo: 123}, %{foo: true}) == ["123"]
     end
   end
 

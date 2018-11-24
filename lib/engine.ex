@@ -646,8 +646,8 @@ defmodule Phoenix.LiveView.Engine do
 
   def changed_assign?(changed, name) do
     case changed do
-      %{^name => _} -> false
-      _ -> true
+      %{^name => _} -> true
+      %{} -> false
     end
   end
 
